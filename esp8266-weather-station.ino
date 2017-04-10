@@ -6,7 +6,9 @@
 #undef WITH_SELECT
 #include <mysql.h>
 
-//defined SQL_USER, SQL_PASS, WIFI_SSID, WIFI_PASS, SQL_SERVER_ADDR
+// defines
+//WIFI_SSID, WIFI_PASS
+//SQL_USER, SQL_PASS, SQL_SERVER_ADDR
 #include "config.h"
 
 enum SensorIdEnum
