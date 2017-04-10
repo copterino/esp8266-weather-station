@@ -1,0 +1,6 @@
+/config.h
+data
+*.filters
+*.sln
+*.user
+*.vcxproj
