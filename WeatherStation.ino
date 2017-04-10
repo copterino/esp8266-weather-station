@@ -2,23 +2,12 @@
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <Adafruit_BME280.h>
-//#include <ESP8266mDNS.h>
 
 #undef WITH_SELECT
 #include <mysql.h>
 
-//defined SQL_USER, SQL_PASS, WIFI_SSID, WIFI_PASS
+//defined SQL_USER, SQL_PASS, WIFI_SSID, WIFI_PASS, SQL_SERVER_ADDR
 #include "config.h"
-
-class Sensor;
-
-void handleRoot();
-void handleWeather();
-void handleNotFound();
-void sendDataToSql(Sensor& sensor);
-void sendDataToSql(int temp10, int humidity, int pressure, int sensorId);
-void setup(void);
-void loop(void);
 
 enum SensorIdEnum
 {
