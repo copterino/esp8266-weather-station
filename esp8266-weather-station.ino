@@ -1,202 +1,40 @@
 #include <ESP8266WiFi.h>
-#include <WiFiClient.h>
 #include <ESP8266WebServer.h>
-#include <Adafruit_BME280.h>
+#include <ArduinoOTA.h>
 
 #undef WITH_SELECT
-#include <mysql.h>
+#include <MySQL_Connection.h>
+#include <MySQL_Cursor.h>
 
-// defines
-//WIFI_SSID, WIFI_PASS
-//SQL_USER, SQL_PASS, SQL_SERVER_ADDR
+#include "Sensor.h"
+
+// defines WIFI_SSID, WIFI_PASS, SQL_USER, SQL_PASS, SQL_SERVER_ADDR
 #include "config.h"
-
-enum SensorIdEnum
-{
-    SI_Guestroom = 1000,
-    SI_Bedroom = 1001,
-    SI_Kitchen = 1002,
-    SI_Street = 1003
-};
-
-struct SensorData
-{
-    SensorData() {}
-    SensorData(float t, float h, float p) : temp(t), hum(h), press(p) {}
-    float temp = 0.f;
-    float hum = 0.f;
-    float press = 0.f;
-};
-
-// I2C (SDA - D2, SCL - D1)
-class Sensor
-{
-public:
-    Sensor(int sensorId, int chipAddr) : id(sensorId), chipAddress(chipAddr) {}
-
-    bool init()
-    {
-        valid = bme.begin(chipAddress);
-        if (!valid)
-        {
-            Serial.print("Could not find a valid BME280 sensor for 0x");
-            Serial.print(chipAddress, HEX);
-            Serial.println(" address.");
-        }
-        else
-        {
-            Serial.print("Sensor BME280 (0x");
-            Serial.print(chipAddress, HEX);
-            Serial.println(") connected.");
-        }
-        return valid;
-    }
-
-    bool isValid() { return valid; }
-    int getId() { return id; }
-
-    float getTemperature() { return temperature; }
-    float getHumidity() { return humidity; }
-    float getPressureMmHg() { return pressure; }
-
-    SensorData getRawData()
-    {
-        if (valid)
-            return SensorData(bme.readTemperature(), bme.readHumidity(), bme.readPressure());
-        return SensorData();
-    }
-
-    bool update(unsigned long curTime)
-    {
-        if (!valid)
-        {
-            /*static int blink = 0;
-            if (curTime - lastUpdateTime > 250)
-            {
-                digitalWrite(led, blink);
-            }
-
-            delay(250);
-            Serial.print("Sensor not connected ");
-            Serial.println(chipAddress);
-            digitalWrite(led, blink);*/
-            return false;
-        }
-        if (curTime - lastUpdateTime > updateInterval)
-        {
-            lastUpdateTime = curTime;
-            accumulateData();
-
-            if (++samplesCount == samplesNeeded)
-            {
-                temperature = accumTemp / samplesCount;
-                humidity = accumHumidity / samplesCount;
-                pressure = accumPressure * 0.0075006f / samplesCount;
-
-                samplesCount = 0;
-                accumTemp = 0.f;
-                accumHumidity = 0.f;
-                accumPressure = 0.f;
-
-                return isDataChanged();
-            }
-        }
-        return false;
-    }
-
-private:
-    void accumulateData()
-    {
-        accumTemp += bme.readTemperature();
-        accumHumidity += bme.readHumidity();
-        accumPressure += bme.readPressure();
-
-        Serial.print("Sensor 0x");
-        Serial.print(chipAddress, HEX);
-        Serial.print(" acc: t: ");
-        Serial.print(accumTemp);
-        Serial.print(" h: ");
-        Serial.print(accumHumidity);
-        Serial.print(" p: ");
-        Serial.println(accumPressure);
-    }
-
-    bool isDataChanged()
-    {
-        bool dataChanged = false;
-        if (fabs(lastTriggerTemp - temperature) >= 0.5f)  // diff 0.5C
-        {
-            lastTriggerTemp = temperature;
-            dataChanged = true;
-        }
-        if (fabs(lastTriggerHumidity - humidity) >= 1.f)  // diff 0.5%
-        {
-            lastTriggerHumidity = humidity;
-            dataChanged = true;
-        }
-        if (fabs(lastTriggerPressure - pressure) >= 1.f)  // diff 1mmHg
-        {
-            lastTriggerPressure = pressure;
-            dataChanged = true;
-        }
-
-        if (!dataChanged)
-        {
-            Serial.print("Data not changed: t: ");
-            Serial.print(temperature);
-            Serial.print(" h: ");
-            Serial.print(humidity);
-            Serial.print(" p: ");
-            Serial.println(pressure);
-        }
-        return dataChanged;
-    }
-
-    const unsigned long updateInterval = 12 * 1000;
-    const unsigned long samplesNeeded = 5;
-
-    int id = 0;
-    int chipAddress = 0;
-    bool valid = false;
-
-    unsigned long lastUpdateTime = 0;
-    unsigned long samplesCount = 0;
-    float temperature = 0.f;
-    float humidity = 0.f;
-    float pressure = 0.f;
-    float lastTriggerTemp = 0.f;
-    float lastTriggerHumidity = 0.f;
-    float lastTriggerPressure = 0.f;
-    float accumTemp = 0.f;
-    float accumHumidity = 0.f;
-    float accumPressure = 0.f;
-
-    Adafruit_BME280 bme;
-};
 
 const int led = D0;
 
-ESP8266WebServer server(80);
+ESP8266WebServer httpServer(80);
 
 Sensor sensors[2] = {
-    Sensor(SI_Guestroom, 0x76),
-    Sensor(SI_Street, 0x77)
+    Sensor(SI_Guestroom, 0x77),
+    Sensor(SI_Street, 0x76)
 };
 
-Connector sqlConn;
+WiFiClient wifiClient;
+MySQL_Connection sqlConn(&wifiClient);
+MySQL_Cursor sqlCursor(&sqlConn);
 IPAddress sqlAddr;
-
 
 void handleRoot()
 {
-    digitalWrite(led, 1);
-    server.send(200, "text/plain", "hello from esp8266!");
     digitalWrite(led, 0);
+    httpServer.send(200, "text/plain", "hello from esp8266!");
+    digitalWrite(led, 1);
 }
 
 void handleWeather()
 {
-    digitalWrite(led, 1);
+    digitalWrite(led, 0);
 
     String message =
         "<!DOCTYPE HTML>"
@@ -234,28 +72,28 @@ void handleWeather()
 
     message += "</body></html>";
 
-    server.send(200, "text/html", message);
+    httpServer.send(200, "text/html", message);
 
-    digitalWrite(led, 0);
+    digitalWrite(led, 1);
 }
 
 void handleNotFound()
 {
-    digitalWrite(led, 1);
+    digitalWrite(led, 0);
     String message = "File Not Found\n\n";
     message += "URI: ";
-    message += server.uri();
+    message += httpServer.uri();
     message += "\nMethod: ";
-    message += (server.method() == HTTP_GET) ? "GET" : "POST";
+    message += (httpServer.method() == HTTP_GET) ? "GET" : "POST";
     message += "\nArguments: ";
-    message += server.args();
+    message += httpServer.args();
     message += "\n";
-    for (uint8_t i = 0; i < server.args(); ++i)
+    for (uint8_t i = 0; i < httpServer.args(); ++i)
     {
-        message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+        message += " " + httpServer.argName(i) + ": " + httpServer.arg(i) + "\n";
     }
-    server.send(404, "text/plain", message);
-    digitalWrite(led, 0);
+    httpServer.send(404, "text/plain", message);
+    digitalWrite(led, 1);
 }
 
 void sendDataToSql(Sensor& sensor)
@@ -271,11 +109,7 @@ void sendDataToSql(Sensor& sensor)
 
 void sendDataToSql(int temp10, int humidity, int pressure, int sensorId)
 {
-    digitalWrite(led, 1);
-    delay(150);
     digitalWrite(led, 0);
-    delay(150);
-    digitalWrite(led, 1);
 
     char buf[128];
     const int temp1 = temp10 / 10;
@@ -283,6 +117,7 @@ void sendDataToSql(int temp10, int humidity, int pressure, int sensorId)
 
     int res = snprintf(buf, sizeof(buf),
         "INSERT INTO Weather.sensor_smile (temp, hum, press, sensorId) VALUES (%d.%d, %d, %d, %d)",
+        //"INSERT INTO Weather.sensor_123 (temp, hum, press, sensorId) VALUES (%d.%d, %d, %d, %d)",
         temp1, temp2, humidity, pressure, sensorId);
 
     if (res < 0 || res >= sizeof(buf))
@@ -290,29 +125,58 @@ void sendDataToSql(int temp10, int humidity, int pressure, int sensorId)
         Serial.println("The SQL buffer is too small.");
     }
 
-    if (sqlConn.cmd_query(buf))
+    if (sqlCursor.execute(buf))
     {
         Serial.print("SQL sent: ");
         Serial.println(buf);
     }
 
-    digitalWrite(led, 0);
+    digitalWrite(led, 1);
+}
+
+void setupOTA()
+{
+    // No authentication by default
+    // ArduinoOTA.setPassword((const char*)"my_password");
+
+    ArduinoOTA.setHostname("weather-station-1");
+
+    ArduinoOTA.onStart([](){ Serial.println("OTA start"); });
+    ArduinoOTA.onEnd([](){ Serial.println("\nOTA end"); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+    {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error)
+    {
+        Serial.printf("Error[%u]: ", error);
+        switch (error)
+        {
+            case OTA_AUTH_ERROR: Serial.println("Auth Failed"); break;
+            case OTA_BEGIN_ERROR: Serial.println("Begin Failed"); break;
+            case OTA_CONNECT_ERROR: Serial.println("Connect Failed"); break;
+            case OTA_RECEIVE_ERROR: Serial.println("Receive Failed"); break;
+            case OTA_END_ERROR: Serial.println("End Failed"); break;
+        }
+    });
 }
 
 void setup(void)
 {
     pinMode(led, OUTPUT);
-    digitalWrite(led, 0);
+    digitalWrite(led, 1);
     Serial.begin(115200);
-    
+
     sqlAddr.fromString(SQL_SERVER_ADDR);
 
-    server.on("/", handleRoot);
-    server.on("/weather", handleWeather);
-    server.onNotFound(handleNotFound);
-    server.begin();
+    httpServer.on("/", handleRoot);
+    httpServer.on("/weather", handleWeather);
+    httpServer.onNotFound(handleNotFound);
+    httpServer.begin();
     Serial.println("HTTP server started");
 
+    setupOTA();
+    
     for (auto& sensor : sensors)
     {
         sensor.init();
@@ -326,38 +190,41 @@ void loop(void)
         Serial.print("Connecting to ");
         Serial.print(WIFI_SSID);
         Serial.println("...");
-        
+
         WiFi.mode(WIFI_STA);  // Client
         WiFi.begin(WIFI_SSID, WIFI_PASS);
         Serial.println("");
 
         while (WiFi.status() != WL_CONNECTED)
         {
-            delay(500);
+            delay(1000);
             Serial.print(".");
         }
 
         //if (WiFi.waitForConnectResult() != WL_CONNECTED)
         //    return;
-        
-        Serial.println("");
-        Serial.print("Connected to ");
-        Serial.println(WIFI_SSID);
+
+        Serial.printf("\nConnected to %s\n", WIFI_SSID);
         Serial.print("IP address: ");
         Serial.println(WiFi.localIP());
-        
-        if (sqlConn.mysql_connect(sqlAddr, 3306, SQL_USER, SQL_PASS))
+
+        ArduinoOTA.begin();
+    }
+
+    if (!sqlConn.connected())
+    {
+        Serial.print("Connecting to SQL...  ");
+        if (sqlConn.connect(sqlAddr, 3306, SQL_USER, SQL_PASS))
         {
-            delay(500);
-            Serial.println("SQL Connected.");
+            Serial.println("OK.");
         }
         else
         {
-            Serial.println("Connection failed.");
+            Serial.println("FAILED.");
         }
     }
-    
-    server.handleClient();
+
+    httpServer.handleClient();
 
     unsigned long curTime = millis();
     for (auto& sensor : sensors)
@@ -367,5 +234,6 @@ void loop(void)
             sendDataToSql(sensor);
         }
     }
-}
 
+    ArduinoOTA.handle();
+}

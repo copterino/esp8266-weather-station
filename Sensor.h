@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <Adafruit_BME280.h>
 
 enum SensorIdEnum
