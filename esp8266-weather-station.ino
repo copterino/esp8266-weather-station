@@ -1,12 +1,11 @@
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
-#include <ArduinoOTA.h>
+#include "Sensor.h"
 
-#undef WITH_SELECT
 #include <MySQL_Connection.h>
 #include <MySQL_Cursor.h>
 
-#include "Sensor.h"
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <ArduinoOTA.h>
 
 // defines WIFI_SSID, WIFI_PASS, SQL_USER, SQL_PASS, SQL_SERVER_ADDR
 #include "config.h"
@@ -100,35 +99,34 @@ void sendDataToSql(Sensor& sensor)
 {
     if (sensor.isValid())
     {
-        sendDataToSql(sensor.getTemperature() * 10,
+        sendDataToSql(sensor.getTemperature(),
                       roundf(sensor.getHumidity()),
                       roundf(sensor.getPressureMmHg()),
                       sensor.getId());
     }
 }
 
-void sendDataToSql(int temp10, int humidity, int pressure, int sensorId)
+void sendDataToSql(float temp, int humidity, int pressure, int sensorId)
 {
     digitalWrite(led, 0);
 
     char buf[128];
-    const int temp1 = temp10 / 10;
-    const int temp2 = temp10 - temp1 * 10;
+    char tempStr[7];
+    dtostrf(temp, sizeof(tempStr)-1, 2, tempStr);
 
     int res = snprintf(buf, sizeof(buf),
-        "INSERT INTO Weather.sensor_smile (temp, hum, press, sensorId) VALUES (%d.%d, %d, %d, %d)",
-        //"INSERT INTO Weather.sensor_123 (temp, hum, press, sensorId) VALUES (%d.%d, %d, %d, %d)",
-        temp1, temp2, humidity, pressure, sensorId);
+        "INSERT INTO Weather.sensor_smile (temp, hum, press, sensorId) VALUES (%s, %d, %d, %d)",
+        tempStr, humidity, pressure, sensorId);
 
     if (res < 0 || res >= sizeof(buf))
     {
-        Serial.println("The SQL buffer is too small.");
+        DebugPrint("The SQL buffer is too small.\n");
+        return;
     }
 
     if (sqlCursor.execute(buf))
     {
-        Serial.print("SQL sent: ");
-        Serial.println(buf);
+        DebugPrint("SQL sent: %s\n", buf);
     }
 
     digitalWrite(led, 1);
@@ -141,22 +139,22 @@ void setupOTA()
 
     ArduinoOTA.setHostname("weather-station-1");
 
-    ArduinoOTA.onStart([](){ Serial.println("OTA start"); });
-    ArduinoOTA.onEnd([](){ Serial.println("\nOTA end"); });
+    ArduinoOTA.onStart([](){ DebugPrint("OTA start\n"); });
+    ArduinoOTA.onEnd([](){ DebugPrint("\nOTA end\n"); });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
     {
-        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+        DebugPrint("Progress: %u%%\r", (progress / (total / 100)));
     });
     ArduinoOTA.onError([](ota_error_t error)
     {
-        Serial.printf("Error[%u]: ", error);
+        DebugPrint("Error[%u]: ", error);
         switch (error)
         {
-            case OTA_AUTH_ERROR: Serial.println("Auth Failed"); break;
-            case OTA_BEGIN_ERROR: Serial.println("Begin Failed"); break;
-            case OTA_CONNECT_ERROR: Serial.println("Connect Failed"); break;
-            case OTA_RECEIVE_ERROR: Serial.println("Receive Failed"); break;
-            case OTA_END_ERROR: Serial.println("End Failed"); break;
+            case OTA_AUTH_ERROR: DebugPrint("Auth Failed\n"); break;
+            case OTA_BEGIN_ERROR: DebugPrint("Begin Failed\n"); break;
+            case OTA_CONNECT_ERROR: DebugPrint("Connect Failed\n"); break;
+            case OTA_RECEIVE_ERROR: DebugPrint("Receive Failed\n"); break;
+            case OTA_END_ERROR: DebugPrint("End Failed\n"); break;
         }
     });
 }
@@ -173,10 +171,10 @@ void setup(void)
     httpServer.on("/weather", handleWeather);
     httpServer.onNotFound(handleNotFound);
     httpServer.begin();
-    Serial.println("HTTP server started");
+    DebugPrint("HTTP server started\n");
 
     setupOTA();
-    
+
     for (auto& sensor : sensors)
     {
         sensor.init();
@@ -187,40 +185,37 @@ void loop(void)
 {
     if (WiFi.status() != WL_CONNECTED)
     {
-        Serial.print("Connecting to ");
-        Serial.print(WIFI_SSID);
-        Serial.println("...");
+        DebugPrint("Connecting to %s...\n", WIFI_SSID);
 
         WiFi.mode(WIFI_STA);  // Client
         WiFi.begin(WIFI_SSID, WIFI_PASS);
-        Serial.println("");
+        DebugPrint("\n");
 
         while (WiFi.status() != WL_CONNECTED)
         {
             delay(1000);
-            Serial.print(".");
+            DebugPrint(".");
         }
 
         //if (WiFi.waitForConnectResult() != WL_CONNECTED)
         //    return;
 
-        Serial.printf("\nConnected to %s\n", WIFI_SSID);
-        Serial.print("IP address: ");
-        Serial.println(WiFi.localIP());
+        DebugPrint("\nConnected to %s\n", WIFI_SSID);
+        DebugPrint("IP address: %s\n", WiFi.localIP().toString().c_str());
 
         ArduinoOTA.begin();
     }
 
     if (!sqlConn.connected())
     {
-        Serial.print("Connecting to SQL...  ");
+        DebugPrint("Connecting to SQL... ");
         if (sqlConn.connect(sqlAddr, 3306, SQL_USER, SQL_PASS))
         {
-            Serial.println("OK.");
+            DebugPrint("OK.\n");
         }
         else
         {
-            Serial.println("FAILED.");
+            DebugPrint("FAILED.\n");
         }
     }
 

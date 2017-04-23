@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Adafruit_BME280.h>
 
+//#define _DEBUG
+
 enum SensorIdEnum
 {
     SI_Guestroom = 1000,
@@ -18,6 +20,14 @@ struct SensorData
     float press = 0.f;
 };
 
+template <typename... MyArgs>
+void DebugPrint(const char* format, MyArgs&&... args)
+{
+#ifdef _DEBUG
+    Serial.printf(format, args...);
+#endif
+}
+
 // I2C (SDA - D2, SCL - D1)
 class Sensor
 {
@@ -29,15 +39,11 @@ public:
         valid = bme.begin(chipAddress);
         if (!valid)
         {
-            Serial.print("Could not find a valid BME280 sensor for 0x");
-            Serial.print(chipAddress, HEX);
-            Serial.println(" address.");
+            DebugPrint("Could not find a valid BME280 sensor for 0x%x address.\n", chipAddress);
         }
         else
         {
-            Serial.print("Sensor BME280 (0x");
-            Serial.print(chipAddress, HEX);
-            Serial.println(") connected.");
+            DebugPrint("Sensor BME280 (0x%x) connected.\n", chipAddress);
         }
         return valid;
     }
@@ -67,8 +73,7 @@ public:
             }
 
             delay(250);
-            Serial.print("Sensor not connected ");
-            Serial.println(chipAddress);
+            DebugPrint("Sensor not connected %d\n", chipAddress);
             digitalWrite(led, blink);*/
             return false;
         }
@@ -101,14 +106,8 @@ private:
         accumHumidity += bme.readHumidity();
         accumPressure += bme.readPressure();
 
-        Serial.print("Sensor 0x");
-        Serial.print(chipAddress, HEX);
-        Serial.print(" acc: t: ");
-        Serial.print(accumTemp);
-        Serial.print(" h: ");
-        Serial.print(accumHumidity);
-        Serial.print(" p: ");
-        Serial.println(accumPressure);
+        DebugPrint("Sensor 0x%x acc: t: %d h: %d p: %d\n",
+                   chipAddress, accumTemp, accumHumidity, accumPressure);
     }
 
     bool isDataChanged()
@@ -132,12 +131,8 @@ private:
 
         if (!dataChanged)
         {
-            Serial.print("Data not changed: t: ");
-            Serial.print(temperature);
-            Serial.print(" h: ");
-            Serial.print(humidity);
-            Serial.print(" p: ");
-            Serial.println(pressure);
+            DebugPrint("Data not changed: t: %d h: %d p: %d\n",
+                       temperature, humidity, pressure);
         }
         return dataChanged;
     }
