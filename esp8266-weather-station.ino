@@ -1,4 +1,5 @@
 #include "Sensor.h"
+#include "DebugStream.h"
 
 #include <MySQL_Connection.h>
 #include <MySQL_Cursor.h>
@@ -11,18 +12,24 @@
 #include "config.h"
 
 const int led = D0;
+const int MAX_SRV_CLIENTS = 1;
+
+DebugStream debug(1024);
+
+Sensor sensors[2] = {
+    Sensor(SI_Guestroom, 0x77, debug),
+    Sensor(SI_Street, 0x76, debug)
+};
 
 ESP8266WebServer httpServer(80);
 
-Sensor sensors[2] = {
-    Sensor(SI_Guestroom, 0x77),
-    Sensor(SI_Street, 0x76)
-};
-
-WiFiClient wifiClient;
-MySQL_Connection sqlConn(&wifiClient);
+WiFiClient sqlClient;
+MySQL_Connection sqlConn(&sqlClient);
 MySQL_Cursor sqlCursor(&sqlConn);
 IPAddress sqlAddr;
+
+WiFiServer telnetServer(23);
+WiFiClient telnetClients[MAX_SRV_CLIENTS];
 
 void handleRoot()
 {
@@ -95,6 +102,58 @@ void handleNotFound()
     digitalWrite(led, 1);
 }
 
+void handleTelnet()
+{
+    //check if there are any new clients
+    if (telnetServer.hasClient())
+    {
+        for (int i = 0; i < MAX_SRV_CLIENTS; ++i)
+        {
+            //find free/disconnected spot
+            if (!telnetClients[i] || !telnetClients[i].connected())
+            {
+                if (telnetClients[i])
+                {
+                    telnetClients[i].stop();
+                }
+                telnetClients[i] = telnetServer.available();
+                DebugPrint(debug, "New client: %d %s\n", i, telnetClients[i].remoteIP().toString().c_str());
+            }
+        }
+        //no free/disconnected spot so reject
+        WiFiClient dropClient = telnetServer.available();
+        dropClient.stop();
+    }
+
+    // check clients for data
+    for (int i = 0; i < MAX_SRV_CLIENTS; ++i)
+    {
+        if (telnetClients[i] && telnetClients[i].connected() && telnetClients[i].available())
+        {
+            // get data from the telnet client and push it to output
+            while (telnetClients[i].available())
+            {
+                DebugPrint("%c", telnetClients[i].read());
+            }
+        }
+    }
+
+    // check for debug data
+    size_t dataSize = debug.GetSize();
+    auto* debugData = debug.PopData();
+    if (debugData)
+    {
+        // push data to all connected telnet clients
+        for (int i = 0; i < MAX_SRV_CLIENTS; ++i)
+        {
+            if (telnetClients[i] && telnetClients[i].connected())
+            {
+                telnetClients[i].write(debugData, dataSize);
+            }
+        }
+    }
+}
+
 void sendDataToSql(Sensor& sensor)
 {
     if (sensor.isValid())
@@ -120,13 +179,13 @@ void sendDataToSql(float temp, int humidity, int pressure, int sensorId)
 
     if (res < 0 || res >= sizeof(buf))
     {
-        DebugPrint("The SQL buffer is too small.\n");
+        DebugPrint(debug, "The SQL buffer is too small.\n");
         return;
     }
 
     if (sqlCursor.execute(buf))
     {
-        DebugPrint("SQL sent: %s\n", buf);
+        DebugPrint(debug, "SQL sent: %s\n", buf);
     }
 
     digitalWrite(led, 1);
@@ -139,22 +198,22 @@ void setupOTA()
 
     ArduinoOTA.setHostname("weather-station-1");
 
-    ArduinoOTA.onStart([](){ DebugPrint("OTA start\n"); });
-    ArduinoOTA.onEnd([](){ DebugPrint("\nOTA end\n"); });
+    ArduinoOTA.onStart([](){ DebugPrint(debug, "OTA start\n"); });
+    ArduinoOTA.onEnd([](){ DebugPrint(debug, "\nOTA end\n"); });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
     {
-        DebugPrint("Progress: %u%%\r", (progress / (total / 100)));
+        DebugPrint(debug, "Progress: %u%%\r", (progress / (total / 100)));
     });
     ArduinoOTA.onError([](ota_error_t error)
     {
-        DebugPrint("Error[%u]: ", error);
+        DebugPrint(debug, "Error[%u]: ", error);
         switch (error)
         {
-            case OTA_AUTH_ERROR: DebugPrint("Auth Failed\n"); break;
-            case OTA_BEGIN_ERROR: DebugPrint("Begin Failed\n"); break;
-            case OTA_CONNECT_ERROR: DebugPrint("Connect Failed\n"); break;
-            case OTA_RECEIVE_ERROR: DebugPrint("Receive Failed\n"); break;
-            case OTA_END_ERROR: DebugPrint("End Failed\n"); break;
+            case OTA_AUTH_ERROR: DebugPrint(debug, "Auth Failed\n"); break;
+            case OTA_BEGIN_ERROR: DebugPrint(debug, "Begin Failed\n"); break;
+            case OTA_CONNECT_ERROR: DebugPrint(debug, "Connect Failed\n"); break;
+            case OTA_RECEIVE_ERROR: DebugPrint(debug, "Receive Failed\n"); break;
+            case OTA_END_ERROR: DebugPrint(debug, "End Failed\n"); break;
         }
     });
 }
@@ -173,6 +232,10 @@ void setup(void)
     httpServer.begin();
     DebugPrint("HTTP server started\n");
 
+    telnetServer.begin();
+    telnetServer.setNoDelay(true);
+    DebugPrint("Telnet server is ready on port 23\n");
+
     setupOTA();
 
     for (auto& sensor : sensors)
@@ -185,39 +248,41 @@ void loop(void)
 {
     if (WiFi.status() != WL_CONNECTED)
     {
-        DebugPrint("Connecting to %s...\n", WIFI_SSID);
+        DebugPrint(debug, "Connecting to %s...\n", WIFI_SSID);
 
         WiFi.mode(WIFI_STA);  // Client
         WiFi.begin(WIFI_SSID, WIFI_PASS);
-        DebugPrint("\n");
+        DebugPrint(debug, "\n");
 
         while (WiFi.status() != WL_CONNECTED)
         {
             delay(1000);
-            DebugPrint(".");
+            DebugPrint(debug, ".");
         }
 
         //if (WiFi.waitForConnectResult() != WL_CONNECTED)
         //    return;
 
-        DebugPrint("\nConnected to %s\n", WIFI_SSID);
-        DebugPrint("IP address: %s\n", WiFi.localIP().toString().c_str());
+        DebugPrint(debug, "\nConnected to %s\n", WIFI_SSID);
+        DebugPrint(debug, "IP address: %s\n", WiFi.localIP().toString().c_str());
 
         ArduinoOTA.begin();
     }
 
     if (!sqlConn.connected())
     {
-        DebugPrint("Connecting to SQL... ");
+        DebugPrint(debug, "Connecting to SQL... ");
         if (sqlConn.connect(sqlAddr, 3306, SQL_USER, SQL_PASS))
         {
-            DebugPrint("OK.\n");
+            DebugPrint(debug, "OK.\n");
         }
         else
         {
-            DebugPrint("FAILED.\n");
+            DebugPrint(debug, "FAILED.\n");
         }
     }
+
+    handleTelnet();
 
     httpServer.handleClient();
 
@@ -231,4 +296,11 @@ void loop(void)
     }
 
     ArduinoOTA.handle();
+
+    /*static long lastUpdateTime = 0;
+    if (curTime - lastUpdateTime > 1000)
+    {
+        lastUpdateTime = curTime;
+        debug.Print("Analog pins: %d, %d, %d\n", analogRead(0), analogRead(1), analogRead(2));
+    }*/
 }

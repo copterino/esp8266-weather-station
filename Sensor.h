@@ -1,7 +1,10 @@
+#ifndef _SENSOR_H_
+#define _SENSOR_H_
+
+#include "DebugStream.h"
+
 #include <Arduino.h>
 #include <Adafruit_BME280.h>
-
-//#define _DEBUG
 
 enum SensorIdEnum
 {
@@ -20,30 +23,27 @@ struct SensorData
     float press = 0.f;
 };
 
-template <typename... MyArgs>
-void DebugPrint(const char* format, MyArgs&&... args)
-{
-#ifdef _DEBUG
-    Serial.printf(format, args...);
-#endif
-}
-
 // I2C (SDA - D2, SCL - D1)
 class Sensor
 {
 public:
-    Sensor(int sensorId, int chipAddr) : id(sensorId), chipAddress(chipAddr) {}
+    Sensor(int sensorId, int chipAddr, DebugStream& debugStream) :
+        id(sensorId),
+        chipAddress(chipAddr),
+        debug(debugStream)
+    {
+    }
 
     bool init()
     {
         valid = bme.begin(chipAddress);
         if (!valid)
         {
-            DebugPrint("Could not find a valid BME280 sensor for 0x%x address.\n", chipAddress);
+            DebugPrint(debug, "Could not find a valid BME280 sensor for 0x%x address.\r\n", chipAddress);
         }
         else
         {
-            DebugPrint("Sensor BME280 (0x%x) connected.\n", chipAddress);
+            DebugPrint(debug, "Sensor BME280 (0x%x) connected.\r\n", chipAddress);
         }
         return valid;
     }
@@ -73,7 +73,7 @@ public:
             }
 
             delay(250);
-            DebugPrint("Sensor not connected %d\n", chipAddress);
+            DebugPrint(debug, "Sensor not connected %d\n", chipAddress);
             digitalWrite(led, blink);*/
             return false;
         }
@@ -106,8 +106,8 @@ private:
         accumHumidity += bme.readHumidity();
         accumPressure += bme.readPressure();
 
-        DebugPrint("Sensor 0x%x acc: t: %d h: %d p: %d\n",
-                   chipAddress, accumTemp, accumHumidity, accumPressure);
+        DebugPrint(debug, "Sensor 0x%x acc - t: %d, h: %d, p: %d\r\n",
+                   chipAddress, (int)accumTemp, (int)accumHumidity, (int)accumPressure);
     }
 
     bool isDataChanged()
@@ -131,8 +131,8 @@ private:
 
         if (!dataChanged)
         {
-            DebugPrint("Data not changed: t: %d h: %d p: %d\n",
-                       temperature, humidity, pressure);
+            DebugPrint(debug, "Data not changed: t: %d h: %d p: %d\r\n",
+                       (int)temperature, (int)humidity, (int)pressure);
         }
         return dataChanged;
     }
@@ -156,5 +156,8 @@ private:
     float accumHumidity = 0.f;
     float accumPressure = 0.f;
 
+    DebugStream& debug;
     Adafruit_BME280 bme;
 };
+
+#endif  // _SENSOR_H_
