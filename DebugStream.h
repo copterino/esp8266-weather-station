@@ -17,59 +17,74 @@ class DebugStream
 {
 public:
     DebugStream(int bufCapacity) :
-        buffer((char*)malloc(bufCapacity)),
-        head(buffer + 1),  // start from +1 character because we will make -1 in Print()
-        capacity(bufCapacity),
-        size(0)
+        m_capacity(bufCapacity),
+        m_buffer((char*)malloc(bufCapacity)),
+        m_head(m_buffer + 1),  // start from +1 character because we will make -1 in Print()
+        m_size(0)
     {
-        buffer[0] = 0;
+        m_buffer[0] = 0;
     }
 
     ~DebugStream()
     {
-        if (buffer)
-            free(buffer);
+        if (m_buffer)
+            free(m_buffer);
     }
 
     template <typename... MyArgs>
-    void Print(const char* format, MyArgs&&... args)
+    void printf(const char* format, MyArgs&&... args)
     {
-        const int freeSize = capacity - size - 1;  // 1 for zero
-        //DebugPrint("Print - size: %d freeSize: %d\n", size, freeSize);
-        if (!buffer || freeSize <= 0)
+        const int freeSize = m_capacity - m_size - 1;  // 1 for zero
+        //DebugPrint("Print - size: %d freeSize: %d\n", m_size, freeSize);
+        if (!m_buffer || freeSize <= 0)
             return;
 
         // minus one means we erase last null terminator to make one solid string
-        int res = snprintf(head - 1, freeSize, format, args...);
-        if (res < 0 || res >= freeSize)
+        int res = snprintf(m_head - 1, freeSize, format, args...);
+        if (res < 0)
         {
-            DebugPrint("MsgSize is too small, %d needed.\n", res);
+            DebugPrint("printf format parse error.\n", freeSize, res);
+            return;
+        }
+        else if (res >= freeSize)
+        {
+            if (m_capacity - 1 > res)
+            {
+                DebugPrint("Buffer is small: %d, %d is needed.\nDoing buffer reset and retry.\n", freeSize, res);
+                clear();
+                printf(format, args...);
+            }
             return;
         }
 
-        size += res;
-        head = buffer + size;
-        //DebugPrint("Print - res: %d, size: %d, head: '%d'\n", res, size, *head);
-        //DebugPrint("Print - buf: '%s'\n", buffer);
+        m_size += res;
+        m_head = m_buffer + m_size;
+        //DebugPrint("Print - res: %d, size: %d, head: '%d'\n", res, m_size, *m_head);
+        //DebugPrint("Print - buf: '%s'\n", m_buffer);
     }
 
-    const uint8_t* PopData()
+    const uint8_t* data()
     {
-        if (size == 0)
+        if (m_size == 0)
             return nullptr;
 
-        size = 0;
-        head = buffer + 1;
-        return (uint8_t*)buffer;
+        return (uint8_t*)m_buffer;
     }
-    
-    int GetSize() { return size; }
+
+    void clear()
+    {
+        m_size = 0;
+        m_head = m_buffer + 1;
+    }
+
+    bool available() { return m_size > 0; }
+    int  size() { return m_size; }
 
 private:
-    char* buffer;
-    char* head;
-    int   capacity;
-    int   size;
+    const int m_capacity;
+    char* m_buffer;
+    char* m_head;
+    int   m_size;
 };
 
 template <typename... Args>
@@ -78,7 +93,7 @@ void DebugPrint(DebugStream& stream, const char* format, Args&&... args)
 #ifdef _DEBUG
     Serial.printf(format, args...);
 #endif
-    stream.Print(format, args...);
+    stream.printf(format, args...);
 }
 
 #endif  // _DEBUGSTREAM_H_

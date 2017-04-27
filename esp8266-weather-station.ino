@@ -139,17 +139,25 @@ void handleTelnet()
     }
 
     // check for debug data
-    size_t dataSize = debug.GetSize();
-    auto* debugData = debug.PopData();
-    if (debugData)
+    if (debug.available())
     {
+        auto* debugData = debug.data();
+        size_t dataSize = debug.size();
+
         // push data to all connected telnet clients
+        bool dataWasSent = false;
         for (int i = 0; i < MAX_SRV_CLIENTS; ++i)
         {
             if (telnetClients[i] && telnetClients[i].connected())
             {
                 telnetClients[i].write(debugData, dataSize);
+                dataWasSent = true;
             }
+        }
+
+        if (dataWasSent)
+        {
+            debug.clear();
         }
     }
 }
@@ -248,11 +256,10 @@ void loop(void)
 {
     if (WiFi.status() != WL_CONNECTED)
     {
-        DebugPrint(debug, "Connecting to %s...\n", WIFI_SSID);
+        DebugPrint(debug, "Connecting to %s...", WIFI_SSID);
 
         WiFi.mode(WIFI_STA);  // Client
         WiFi.begin(WIFI_SSID, WIFI_PASS);
-        DebugPrint(debug, "\n");
 
         while (WiFi.status() != WL_CONNECTED)
         {
