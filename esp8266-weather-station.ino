@@ -301,7 +301,7 @@ void loop(void)
 
         configTime(timezoneSec, 0, "pool.ntp.org", "time.nist.gov");
         DebugPrint(debug, "Waiting for time");
-        const unsigned int waitTill = millis() + 5000;
+        const unsigned long waitTill = millis() + 5000;
         while (millis() < waitTill)
         {
             DebugPrint(debug, ".");
