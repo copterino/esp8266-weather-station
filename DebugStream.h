@@ -40,26 +40,26 @@ public:
             return;
 
         // minus one means we erase last null terminator to make one solid string
-        int res = snprintf(m_head - 1, freeSize, format, args...);
-        if (res < 0)
+        int len = snprintf(m_head - 1, freeSize, format, args...);
+        if (len < 0)
         {
-            DebugPrint("printf format parse error.\n", freeSize, res);
+            DebugPrint("printf format parse error.\r\n", freeSize, len);
             return;
         }
-        else if (res >= freeSize)
+        else if (len >= freeSize)
         {
-            if (m_capacity - 1 > res)
+            if (m_capacity - 1 > len)
             {
-                DebugPrint("Buffer is small: %d, %d is needed.\nDoing buffer reset and retry.\n", freeSize, res);
+                DebugPrint("Buffer is small: %d, %d is needed.\nDoing buffer reset and retry.\r\n", freeSize, len);
                 clear();
                 printf(format, args...);
             }
             return;
         }
 
-        m_size += res;
+        //DebugPrint("Print - len: %d, size: %d, lastMsg: '%s'\n", len, m_size, m_head - 1);
+        m_size += len;
         m_head = m_buffer + m_size;
-        //DebugPrint("Print - res: %d, size: %d, head: '%d'\n", res, m_size, *m_head);
         //DebugPrint("Print - buf: '%s'\n", m_buffer);
     }
 

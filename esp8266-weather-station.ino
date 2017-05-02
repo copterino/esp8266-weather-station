@@ -8,11 +8,14 @@
 #include <ESP8266WebServer.h>
 #include <ArduinoOTA.h>
 
+#include <time.h>
+
 // defines WIFI_SSID, WIFI_PASS, SQL_USER, SQL_PASS, SQL_SERVER_ADDR
 #include "config.h"
 
 const int led = D0;
 const int MAX_SRV_CLIENTS = 1;
+bool timeIsSet = false;
 
 DebugStream debug(1024);
 
@@ -117,7 +120,7 @@ void handleTelnet()
                     telnetClients[i].stop();
                 }
                 telnetClients[i] = telnetServer.available();
-                DebugPrint(debug, "New client: %d %s\n", i, telnetClients[i].remoteIP().toString().c_str());
+                DebugPrint(debug, "New client: %d %s\r\n", i, telnetClients[i].remoteIP().toString().c_str());
             }
         }
         //no free/disconnected spot so reject
@@ -187,13 +190,13 @@ void sendDataToSql(float temp, int humidity, int pressure, int sensorId)
 
     if (res < 0 || res >= sizeof(buf))
     {
-        DebugPrint(debug, "The SQL buffer is too small.\n");
+        DebugPrint(debug, "The SQL buffer is too small.\r\n");
         return;
     }
 
     if (sqlCursor.execute(buf))
     {
-        DebugPrint(debug, "SQL sent: %s\n", buf);
+        DebugPrint(debug, "SQL sent: %s\r\n", buf);
     }
 
     digitalWrite(led, 1);
@@ -206,8 +209,8 @@ void setupOTA()
 
     ArduinoOTA.setHostname("weather-station-1");
 
-    ArduinoOTA.onStart([](){ DebugPrint(debug, "OTA start\n"); });
-    ArduinoOTA.onEnd([](){ DebugPrint(debug, "\nOTA end\n"); });
+    ArduinoOTA.onStart([](){ DebugPrint(debug, "OTA start\r\n"); });
+    ArduinoOTA.onEnd([](){ DebugPrint(debug, "\nOTA end\r\n"); });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
     {
         DebugPrint(debug, "Progress: %u%%\r", (progress / (total / 100)));
@@ -217,11 +220,11 @@ void setupOTA()
         DebugPrint(debug, "Error[%u]: ", error);
         switch (error)
         {
-            case OTA_AUTH_ERROR: DebugPrint(debug, "Auth Failed\n"); break;
-            case OTA_BEGIN_ERROR: DebugPrint(debug, "Begin Failed\n"); break;
-            case OTA_CONNECT_ERROR: DebugPrint(debug, "Connect Failed\n"); break;
-            case OTA_RECEIVE_ERROR: DebugPrint(debug, "Receive Failed\n"); break;
-            case OTA_END_ERROR: DebugPrint(debug, "End Failed\n"); break;
+            case OTA_AUTH_ERROR: DebugPrint(debug, "Auth Failed\r\n"); break;
+            case OTA_BEGIN_ERROR: DebugPrint(debug, "Begin Failed\r\n"); break;
+            case OTA_CONNECT_ERROR: DebugPrint(debug, "Connect Failed\r\n"); break;
+            case OTA_RECEIVE_ERROR: DebugPrint(debug, "Receive Failed\r\n"); break;
+            case OTA_END_ERROR: DebugPrint(debug, "End Failed\r\n"); break;
         }
     });
 }
@@ -234,17 +237,18 @@ void setup(void)
 
     sqlAddr.fromString(SQL_SERVER_ADDR);
 
+    telnetServer.begin();
+    telnetServer.setNoDelay(true);
+    DebugPrint("\r\nTelnet server is ready on port 23\r\n");
+
     httpServer.on("/", handleRoot);
     httpServer.on("/weather", handleWeather);
     httpServer.onNotFound(handleNotFound);
     httpServer.begin();
-    DebugPrint("HTTP server started\n");
-
-    telnetServer.begin();
-    telnetServer.setNoDelay(true);
-    DebugPrint("Telnet server is ready on port 23\n");
+    DebugPrint("HTTP server started\r\n");
 
     setupOTA();
+    DebugPrint("OTA is ready\r\n");
 
     for (auto& sensor : sensors)
     {
@@ -256,7 +260,7 @@ void loop(void)
 {
     if (WiFi.status() != WL_CONNECTED)
     {
-        DebugPrint(debug, "Connecting to %s...", WIFI_SSID);
+        DebugPrint(debug, "Connecting to '%s'...", WIFI_SSID);
 
         WiFi.mode(WIFI_STA);  // Client
         WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -270,8 +274,8 @@ void loop(void)
         //if (WiFi.waitForConnectResult() != WL_CONNECTED)
         //    return;
 
-        DebugPrint(debug, "\nConnected to %s\n", WIFI_SSID);
-        DebugPrint(debug, "IP address: %s\n", WiFi.localIP().toString().c_str());
+        DebugPrint(debug, "\r\nConnected OK\r\n");
+        DebugPrint(debug, "IP address: %s\r\n", WiFi.localIP().toString().c_str());
 
         ArduinoOTA.begin();
     }
@@ -281,11 +285,44 @@ void loop(void)
         DebugPrint(debug, "Connecting to SQL... ");
         if (sqlConn.connect(sqlAddr, 3306, SQL_USER, SQL_PASS))
         {
-            DebugPrint(debug, "OK.\n");
+            DebugPrint(debug, "OK\r\n");
         }
         else
         {
-            DebugPrint(debug, "FAILED.\n");
+            DebugPrint(debug, "FAILED\r\n");
+        }
+    }
+
+    // Time setting
+    if (!timeIsSet)
+    {
+        const int daySavingOffset = 3600;
+        const int timezoneSec = 2 * 3600 + daySavingOffset;
+
+        configTime(timezoneSec, 0, "pool.ntp.org", "time.nist.gov");
+        DebugPrint(debug, "Waiting for time");
+        const unsigned int waitTill = millis() + 5000;
+        while (millis() < waitTill)
+        {
+            DebugPrint(debug, ".");
+            const unsigned long someTimeAfter1970 = (2016 - 1970) * 365 * 24 * 3600;
+            time_t now = time(nullptr);
+            if (now > someTimeAfter1970)
+            {
+                timeIsSet = true;
+                break;
+            }
+            delay(100);
+        }
+
+        if (timeIsSet)
+        {
+            time_t now = time(nullptr);
+            DebugPrint(debug, " OK - %s\r\n", ctime(&now));
+        }
+        else
+        {
+            DebugPrint(debug, " FAILED\r\n");
         }
     }
 
@@ -308,6 +345,9 @@ void loop(void)
     if (curTime - lastUpdateTime > 1000)
     {
         lastUpdateTime = curTime;
-        debug.Print("Analog pins: %d, %d, %d\n", analogRead(0), analogRead(1), analogRead(2));
+        //debug.printf("1Analog pins: %d, %d, %d\n2Analog pins: %d, %d, %d\n", analogRead(0), analogRead(1), analogRead(2));
+        //debug.printf("12345\r\n12345\r\n12345\r\n");
+        time_t now = time(nullptr);
+        DebugPrint(debug, "cur time: %s", ctime(&now));
     }*/
 }
