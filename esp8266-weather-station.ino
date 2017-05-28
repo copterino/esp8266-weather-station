@@ -131,7 +131,7 @@ void handleTelnet()
     // check clients for data
     for (int i = 0; i < MAX_SRV_CLIENTS; ++i)
     {
-        if (telnetClients[i] && telnetClients[i].connected() && telnetClients[i].available())
+        if (telnetClients[i] && telnetClients[i].connected())
         {
             // get data from the telnet client and push it to output
             while (telnetClients[i].available())
