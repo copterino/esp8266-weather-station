@@ -1,12 +1,10 @@
 #include "Sensor.h"
 #include "DebugStream.h"
 
-#include <MySQL_Connection.h>
-#include <MySQL_Cursor.h>
-
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ArduinoOTA.h>
+#include <PubSubClient.h>
 
 #include <time.h>
 
@@ -26,13 +24,13 @@ Sensor sensors[2] = {
 
 ESP8266WebServer httpServer(80);
 
-WiFiClient sqlClient;
-MySQL_Connection sqlConn(&sqlClient);
-MySQL_Cursor sqlCursor(&sqlConn);
-IPAddress sqlAddr;
+WiFiClient mqttClient;
+PubSubClient mqtt(DATA_SERVER_ADDR, DATA_SERVER_PORT, mqttClient);
 
 WiFiServer telnetServer(23);
 WiFiClient telnetClients[MAX_SRV_CLIENTS];
+
+void sendDataViaMqtt(float temp, int humidity, int pressure, int sensorId);
 
 void handleRoot()
 {
@@ -165,39 +163,98 @@ void handleTelnet()
     }
 }
 
-void sendDataToSql(Sensor& sensor)
+void sendDataToServer(Sensor& sensor)
 {
     if (sensor.isValid())
     {
-        sendDataToSql(sensor.getTemperature(),
-                      roundf(sensor.getHumidity()),
-                      roundf(sensor.getPressureMmHg()),
-                      sensor.getId());
+        sendDataViaMqtt(sensor.getTemperature(),
+                        roundf(sensor.getHumidity()),
+                        roundf(sensor.getPressureMmHg()),
+                        sensor.getId());
     }
 }
 
-void sendDataToSql(float temp, int humidity, int pressure, int sensorId)
+/*uint32_t getParamsHash(curTime, temp, humidity, pressure, sensorId)
+{
+    return;
+}*/
+
+void mqttCallback(char* topic, byte* payload, unsigned int length)
+{
+    DebugPrint(debug, "Message arrived [%s]\n", topic);
+
+    for (unsigned int i = 0; i < length; ++i)
+    {
+        DebugPrint(debug, "%c", (char)payload[i]);
+    }
+    DebugPrint(debug, "\n");
+
+    // Switch on the LED if an 1 was received as first character
+    if ((char)payload[0] == '1')
+    {
+        digitalWrite(BUILTIN_LED, LOW);
+        // Turn the LED on (Note that LOW is the voltage level
+        // but actually the LED is on; this is because
+        // it is acive low on the ESP-01)
+    }
+    else
+    {
+        digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
+    }
+}
+
+void sendDataViaMqtt(float temp, int humidity, int pressure, int sensorId)
 {
     digitalWrite(led, 0);
+    
+    if (!timeIsSet)
+        return;
 
-    char buf[128];
+    char payload[128];
     char tempStr[7];
+    char tokenStr[10];
     dtostrf(temp, sizeof(tempStr)-1, 2, tempStr);
 
-    int res = snprintf(buf, sizeof(buf),
-        "INSERT INTO Weather.sensor_smile (temp, hum, press, sensorId) VALUES (%s, %d, %d, %d)",
-        tempStr, humidity, pressure, sensorId);
+    // remove trailing space
+    char* tempStrP = tempStr;
+    while (*tempStrP == ' ')
+        ++tempStrP;
 
-    if (res < 0 || res >= sizeof(buf))
+    const uint32_t curTime = time(nullptr);
+    const uint32_t token = 0; //getParamsHash(curTime, temp, humidity, pressure, sensorId);
+    snprintf(tokenStr, sizeof(tokenStr), "%x", token);
+
+    // {"d":1495917000, "t":25.7, "h":51, "p":750, "sid":1003, "tok":"806be8"}
+    int res = snprintf(payload, sizeof(payload),
+        "{\"d\":%u,\"t\":%s,\"h\":%d,\"p\":%d,\"sid\":%d,\"tok\":\"%s\"}",
+        curTime, tempStrP, humidity, pressure, sensorId, tokenStr);
+
+    // WITHOUT TIME
+    //int res = snprintf(payload, sizeof(payload),
+    //    "{\"t\":%s,\"h\":%d,\"p\":%d,\"sid\":%d,\"tok\":\"%s\"}",
+    //    tempStrP, humidity, pressure, sensorId, tokenStr);
+
+    if (res < 0 || res >= sizeof(payload))
     {
-        DebugPrint(debug, "The SQL buffer is too small.\r\n");
+        DebugPrint(debug, "Payload buffer is too small.\r\n");
         return;
     }
 
-    if (sqlCursor.execute(buf))
+    if (mqtt.connect(WiFi.macAddress().c_str()))
     {
-        DebugPrint(debug, "SQL sent: %s\r\n", buf);
+        DebugPrint(debug, "Sending to mqtt: %s\r\n", payload);
+
+        if (!mqtt.publish(MQTT_TOPIC, payload))
+        {
+            DebugPrint(debug, "Cannot send to mqtt server: %s:%d\r\n", DATA_SERVER_ADDR, DATA_SERVER_PORT);
+        }
     }
+    else
+    {
+        DebugPrint(debug, "Server unreachable: %s:%d\r\n", DATA_SERVER_ADDR, DATA_SERVER_PORT);
+    }
+
+    mqtt.disconnect();
 
     digitalWrite(led, 1);
 }
@@ -220,11 +277,11 @@ void setupOTA()
         DebugPrint(debug, "Error[%u]: ", error);
         switch (error)
         {
-            case OTA_AUTH_ERROR: DebugPrint(debug, "Auth Failed\r\n"); break;
-            case OTA_BEGIN_ERROR: DebugPrint(debug, "Begin Failed\r\n"); break;
+            case OTA_AUTH_ERROR:    DebugPrint(debug, "Auth Failed\r\n"); break;
+            case OTA_BEGIN_ERROR:   DebugPrint(debug, "Begin Failed\r\n"); break;
             case OTA_CONNECT_ERROR: DebugPrint(debug, "Connect Failed\r\n"); break;
             case OTA_RECEIVE_ERROR: DebugPrint(debug, "Receive Failed\r\n"); break;
-            case OTA_END_ERROR: DebugPrint(debug, "End Failed\r\n"); break;
+            case OTA_END_ERROR:     DebugPrint(debug, "End Failed\r\n"); break;
         }
     });
 }
@@ -235,7 +292,7 @@ void setup(void)
     digitalWrite(led, 1);
     Serial.begin(115200);
 
-    sqlAddr.fromString(SQL_SERVER_ADDR);
+    mqtt.setCallback(mqttCallback);
 
     telnetServer.begin();
     telnetServer.setNoDelay(true);
@@ -279,25 +336,14 @@ void loop(void)
 
         ArduinoOTA.begin();
     }
-
-    if (!sqlConn.connected())
-    {
-        DebugPrint(debug, "Connecting to SQL... ");
-        if (sqlConn.connect(sqlAddr, 3306, SQL_USER, SQL_PASS))
-        {
-            DebugPrint(debug, "OK\r\n");
-        }
-        else
-        {
-            DebugPrint(debug, "FAILED\r\n");
-        }
-    }
+    
+    handleTelnet();
 
     // Time setting
     if (!timeIsSet)
     {
-        const int daySavingOffset = 3600;
-        const int timezoneSec = 2 * 3600 + daySavingOffset;
+        //const int daySavingOffset = 3600;
+        const int timezoneSec = 0; //2 * 3600 + daySavingOffset;
 
         configTime(timezoneSec, 0, "pool.ntp.org", "time.nist.gov");
         DebugPrint(debug, "Waiting for time");
@@ -305,9 +351,9 @@ void loop(void)
         while (millis() < waitTill)
         {
             DebugPrint(debug, ".");
-            const unsigned long someTimeAfter1970 = (2016 - 1970) * 365 * 24 * 3600;
-            time_t now = time(nullptr);
-            if (now > someTimeAfter1970)
+            const unsigned long anyTimeAfter1970 = (2016 - 1970) * 365 * 24 * 3600;
+            const time_t now = time(nullptr);
+            if (now > anyTimeAfter1970)
             {
                 timeIsSet = true;
                 break;
@@ -317,7 +363,7 @@ void loop(void)
 
         if (timeIsSet)
         {
-            time_t now = time(nullptr);
+            const time_t now = time(nullptr);
             DebugPrint(debug, " OK - %s\r\n", ctime(&now));
         }
         else
@@ -326,28 +372,27 @@ void loop(void)
         }
     }
 
-    handleTelnet();
-
     httpServer.handleClient();
 
-    unsigned long curTime = millis();
+    const unsigned long curTime = millis();
     for (auto& sensor : sensors)
     {
         if (sensor.update(curTime))
         {
-            sendDataToSql(sensor);
+            sendDataToServer(sensor);
         }
     }
 
     ArduinoOTA.handle();
 
     /*static long lastUpdateTime = 0;
-    if (curTime - lastUpdateTime > 1000)
+    if (curTime - lastUpdateTime > 10000)
     {
         lastUpdateTime = curTime;
         //debug.printf("1Analog pins: %d, %d, %d\n2Analog pins: %d, %d, %d\n", analogRead(0), analogRead(1), analogRead(2));
         //debug.printf("12345\r\n12345\r\n12345\r\n");
         time_t now = time(nullptr);
         DebugPrint(debug, "cur time: %s", ctime(&now));
+        sendDataViaHttp(25.7, 35, 750, 1003);
     }*/
 }
