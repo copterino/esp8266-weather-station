@@ -5,3 +5,4 @@
 
 #define WIFI_SSID "Your WiFi Access Point SSID Name"
 #define WIFI_PASS "wifi_password"
+#define ESP_HOSTNAME "MyWeatherStation_1"
