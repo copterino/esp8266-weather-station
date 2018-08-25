@@ -3,6 +3,7 @@
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#include <WebSocketsServer.h>
 #include <ArduinoOTA.h>
 #include <PubSubClient.h>
 
@@ -11,18 +12,20 @@
 // defines WIFI_SSID, WIFI_PASS, SQL_USER, SQL_PASS, SQL_SERVER_ADDR
 #include "config.h"
 
-const int led = D0;
+const int led = LED_BUILTIN; //D0;
 const int MAX_SRV_CLIENTS = 1;
 bool timeIsSet = false;
 
 DebugStream debug(1024);
 
 Sensor sensors[2] = {
-    Sensor(SI_Guestroom, 0x77, debug),
-    Sensor(SI_Street, 0x76, debug)
+    Sensor(0x77, debug),
+    Sensor(0x76, debug)
 };
 
 ESP8266WebServer httpServer(80);
+WebSocketsServer wsServer(81);
+int wsClients = 0;
 
 WiFiClient mqttClient;
 PubSubClient mqtt(DATA_SERVER_ADDR, DATA_SERVER_PORT, mqttClient);
@@ -30,57 +33,14 @@ PubSubClient mqtt(DATA_SERVER_ADDR, DATA_SERVER_PORT, mqttClient);
 WiFiServer telnetServer(23);
 WiFiClient telnetClients[MAX_SRV_CLIENTS];
 
-void sendDataViaMqtt(float temp, int humidity, int pressure, int sensorId);
+String mqttTopic;
+
+void sendDataViaMqtt(int sensorId, float temp, int humidity, int pressure);
 
 void handleRoot()
 {
     digitalWrite(led, 0);
     httpServer.send(200, "text/plain", "hello from esp8266!");
-    digitalWrite(led, 1);
-}
-
-void handleWeather()
-{
-    digitalWrite(led, 0);
-
-    String message =
-        "<!DOCTYPE HTML>"
-        "<html>"
-        "<head><META HTTP-EQUIV=\"refresh\" CONTENT=\"15\"></head><body>"
-        "<h1>ESP8266 Weather Web Server</h1>";
-
-    for (auto& sensor : sensors)
-    {
-        SensorData data = sensor.getRawData();
-
-        char temperatureString[7];
-        char humidityString[7];
-        char pressureMmString[6];
-        char dpString[7];
-        float pmm = data.press * 0.0075006f;
-        float dp = data.temp - 0.2f*(100.f - data.hum);
-        dtostrf(data.temp, 6, 1, temperatureString);
-        dtostrf(data.hum, 6, 1, humidityString);
-        dtostrf(pmm, 5, 2, pressureMmString);
-        dtostrf(dp, 6, 1, dpString);
-
-        message += "<h1>BME280 sensor ";
-        message += sensor.getId();
-        message += "</h1><table border=\"2\" width=\"456\" cellpadding=\"10\"><tbody><tr><td><h3>Temperature = ";
-        message += temperatureString;
-        message += "&deg;C</h3><h3>Humidity = ";
-        message += humidityString;
-        message += "%</h3><h3>Approx. Dew Point = ";
-        message += dpString;
-        message += "&deg;C</h3><h3>Pressure = ";
-        message += pressureMmString;
-        message += " mmHg</h3></td></tr></tbody></table><br>";
-    }
-
-    message += "</body></html>";
-
-    httpServer.send(200, "text/html", message);
-
     digitalWrite(led, 1);
 }
 
@@ -101,6 +61,116 @@ void handleNotFound()
     }
     httpServer.send(404, "text/plain", message);
     digitalWrite(led, 1);
+}
+
+void handleWeather()
+{
+    digitalWrite(led, 0);
+
+    String message =
+        "<html><head>"
+        "<script>"
+          "var ws_conn = new WebSocket('ws://'+location.hostname+':81/', ['arduino']);"
+          "ws_conn.onopen = function() { ws_conn.send('Connect ' + new Date()); };"
+          "ws_conn.onerror = function(e) { console.log('WebSocket Error ', e); };"
+          "ws_conn.onmessage = function(m) {"
+            //"console.log('Server: ', m.data);"
+            "var obj = JSON.parse(m.data);"
+            //"console.log('Json obj: ', obj);"
+            "for (k in obj) {"
+              "document.getElementById('temp'+k).innerHTML = obj[k].temp;"
+              "document.getElementById('hum'+k).innerHTML = obj[k].hum;"
+              "document.getElementById('press'+k).innerHTML = (obj[k].press * 0.0075006).toFixed(2);"
+              "document.getElementById('dew'+k).innerHTML = (obj[k].temp - 0.2*(100 - obj[k].hum)).toFixed(2);"
+            "}"
+            //"var my_log = document.getElementById('msg_log');"
+            //"my_log.innerHTML = m.data + '<br>' + my_log.innerHTML;"
+          "};"
+        "</script>"
+        "</head>"
+        "<body>"
+        "<h1>ESP8266 Weather Web Server</h1>";
+
+    for (auto& sensor : sensors)
+    {
+        const auto id = sensor.getId();
+        SensorData data = sensor.getRawData();
+
+        char temperatureString[7];
+        char humidityString[7];
+        char pressureMmString[6];
+        char dpString[7];
+        float pmm = data.press * 0.0075006f;
+        float dp = data.temp - 0.2f*(100.f - data.hum);
+        dtostrf(data.temp, 6, 1, temperatureString);
+        dtostrf(data.hum, 6, 1, humidityString);
+        dtostrf(pmm, 5, 2, pressureMmString);
+        dtostrf(dp, 6, 1, dpString);
+
+        message += "<h1>BME280 sensor ";
+        message += id;
+        message += "</h1><table border=\"2\" width=\"456\" cellpadding=\"10\"><tbody><tr><td><h3>Temperature: <span id=\"temp";
+        message += id;
+        message += "\">";
+        message += temperatureString;
+        message += "</span>&deg;C</h3>";
+
+        message += "<h3>Humidity: <span id=\"hum";
+        message += id;
+        message += "\">";
+        message += humidityString;
+        message += "</span>%</h3>";
+
+        message += "<h3>Approx. Dew Point: <span id=\"dew";
+        message += id;
+        message += "\">";
+        message += dpString;
+        message += "</span>&deg;C</h3>";
+        
+        message += "<h3>Pressure: <span id=\"press";
+        message += id;
+        message += "\">";
+        message += pressureMmString;
+        message += "</span> mmHg</h3>";
+
+        message += "</td></tr></tbody></table><br>";
+    }
+
+    //message += "<div id=\"msg_log\"></div>";
+
+    message += "</body></html>";
+
+    httpServer.send(200, "text/html", message);
+
+    digitalWrite(led, 1);
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
+{
+    switch(type)
+    {
+        case WStype_DISCONNECTED:
+            --wsClients;
+
+            DebugPrint(debug, "[%u] Disconnected! Clients:%d\r\n", num, wsClients);
+            break;
+        case WStype_CONNECTED:
+        {
+            ++wsClients;
+
+            IPAddress ip = wsServer.remoteIP(num);
+            DebugPrint(debug, "[%u] Connected from %d.%d.%d.%d. Clients:%d url: %s\r\n", num, ip[0], ip[1], ip[2], ip[3], wsClients, payload);
+
+            // send message to client
+            //wsServer.sendTXT(num, "Connected");
+            break;
+        }
+        case WStype_TEXT:
+        {
+            DebugPrint("[%u] get Text: %s\n", num, payload);
+            break;
+        }
+    }
 }
 
 void handleTelnet()
@@ -167,14 +237,14 @@ void sendDataToServer(Sensor& sensor)
 {
     if (sensor.isValid())
     {
-        sendDataViaMqtt(sensor.getTemperature(),
+        sendDataViaMqtt(sensor.getId(),
+                        sensor.getTemperature(),
                         roundf(sensor.getHumidity()),
-                        roundf(sensor.getPressureMmHg()),
-                        sensor.getId());
+                        roundf(sensor.getPressureMmHg()));
     }
 }
 
-/*uint32_t getParamsHash(curTime, temp, humidity, pressure, sensorId)
+/*uint32_t getParamsHash(sensorId, curTime, temp, humidity, pressure)
 {
     return;
 }*/
@@ -192,18 +262,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length)
     // Switch on the LED if an 1 was received as first character
     if ((char)payload[0] == '1')
     {
-        digitalWrite(BUILTIN_LED, LOW);
+        digitalWrite(LED_BUILTIN, LOW);
         // Turn the LED on (Note that LOW is the voltage level
         // but actually the LED is on; this is because
         // it is acive low on the ESP-01)
     }
     else
     {
-        digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
+        digitalWrite(LED_BUILTIN, HIGH);  // Turn the LED off by making the voltage HIGH
     }
 }
 
-void sendDataViaMqtt(float temp, int humidity, int pressure, int sensorId)
+void sendDataViaMqtt(int sensorId, float temp, int humidity, int pressure)
 {
     digitalWrite(led, 0);
     
@@ -221,18 +291,18 @@ void sendDataViaMqtt(float temp, int humidity, int pressure, int sensorId)
         ++tempStrP;
 
     const uint32_t curTime = time(nullptr);
-    const uint32_t token = 0; //getParamsHash(curTime, temp, humidity, pressure, sensorId);
+    const uint32_t token = 0; //getParamsHash(sensorId, curTime, temp, humidity, pressure);
     snprintf(tokenStr, sizeof(tokenStr), "%x", token);
 
     // {"d":1495917000, "t":25.7, "h":51, "p":750, "sid":1003, "tok":"806be8"}
     int res = snprintf(payload, sizeof(payload),
-        "{\"d\":%u,\"t\":%s,\"h\":%d,\"p\":%d,\"sid\":%d,\"tok\":\"%s\"}",
-        curTime, tempStrP, humidity, pressure, sensorId, tokenStr);
+        "{\"d\":%u,\"sid\":%d,\"t\":%s,\"h\":%d,\"p\":%d,\"tok\":\"%s\",\"bat\":%s}",
+        curTime, sensorId, tempStrP, humidity, pressure, tokenStr, "3.30");
 
     // WITHOUT TIME
     //int res = snprintf(payload, sizeof(payload),
-    //    "{\"t\":%s,\"h\":%d,\"p\":%d,\"sid\":%d,\"tok\":\"%s\"}",
-    //    tempStrP, humidity, pressure, sensorId, tokenStr);
+    //    "{\"sid\":%d,\"t\":%s,\"h\":%d,\"p\":%d,\"tok\":\"%s\"}",
+    //    sensorId, tempStrP, humidity, pressure, tokenStr);
 
     if (res < 0 || res >= sizeof(payload))
     {
@@ -244,7 +314,7 @@ void sendDataViaMqtt(float temp, int humidity, int pressure, int sensorId)
     {
         DebugPrint(debug, "Sending to mqtt: %s\r\n", payload);
 
-        if (!mqtt.publish(MQTT_TOPIC, payload))
+        if (!mqtt.publish(mqttTopic.c_str(), payload))
         {
             DebugPrint(debug, "Cannot send to mqtt server: %s:%d\r\n", DATA_SERVER_ADDR, DATA_SERVER_PORT);
         }
@@ -257,6 +327,40 @@ void sendDataViaMqtt(float temp, int humidity, int pressure, int sensorId)
     mqtt.disconnect();
 
     digitalWrite(led, 1);
+}
+
+void sendDataToWebSocket(Sensor& sensor)
+{
+    if (!sensor.isValid())
+        return;
+
+    SensorData data = sensor.getRawData();
+    const int sensorId = sensor.getId();
+    const float temp = data.temp;
+    const int humidity = roundf(data.hum);
+    const int pressure = roundf(data.press);
+
+    char payload[128];
+    char tempStr[7];
+    dtostrf(temp, sizeof(tempStr)-1, 2, tempStr);
+
+    // remove trailing space
+    char* tempStrP = tempStr;
+    while (*tempStrP == ' ')
+        ++tempStrP;
+
+    // "{"118":{"temp":25,"hum":71,"press":97748}}"
+    int res = snprintf(payload, sizeof(payload),
+        "{\"%u\":{\"temp\":%s,\"hum\":%d,\"press\":%d}}",
+        sensorId, tempStrP, humidity, pressure);
+
+    if (res < 0 || res >= sizeof(payload))
+    {
+        DebugPrint(debug, "Payload ws buffer is too small.\r\n");
+        return;
+    }
+
+    wsServer.broadcastTXT(payload);
 }
 
 void setupOTA()
@@ -291,6 +395,8 @@ void setup(void)
     pinMode(led, OUTPUT);
     digitalWrite(led, 1);
     Serial.begin(115200);
+    
+    WiFi.hostname(ESP_HOSTNAME);
 
     mqtt.setCallback(mqttCallback);
 
@@ -310,6 +416,14 @@ void setup(void)
     for (auto& sensor : sensors)
     {
         sensor.init();
+    }
+
+    // e.g. A0:20:A6:10:3C:47
+    mqttTopic = MQTT_TOPIC + WiFi.macAddress();
+    for (unsigned int i = sizeof(MQTT_TOPIC); i < mqttTopic.length(); ++i)
+    {
+        if (mqttTopic[i] == ':')
+            mqttTopic[i] = '_';
     }
 }
 
@@ -335,6 +449,10 @@ void loop(void)
         DebugPrint(debug, "IP address: %s\r\n", WiFi.localIP().toString().c_str());
 
         ArduinoOTA.begin();
+        
+        // start webSocket server
+        wsServer.begin();
+        wsServer.onEvent(webSocketEvent);
     }
     
     handleTelnet();
@@ -372,8 +490,11 @@ void loop(void)
         }
     }
 
+    wsServer.loop();
     httpServer.handleClient();
 
+    static const int wsSendInterval = 1000;
+    static int wsLastUpdateTime = 0;
     const unsigned long curTime = millis();
     for (auto& sensor : sensors)
     {
@@ -381,6 +502,15 @@ void loop(void)
         {
             sendDataToServer(sensor);
         }
+
+        if (wsClients > 0 && (curTime - wsLastUpdateTime > wsSendInterval))
+        {
+            sendDataToWebSocket(sensor);
+        }
+    }
+    if (curTime - wsLastUpdateTime > wsSendInterval)
+    {
+        wsLastUpdateTime = curTime;
     }
 
     ArduinoOTA.handle();
@@ -393,6 +523,6 @@ void loop(void)
         //debug.printf("12345\r\n12345\r\n12345\r\n");
         time_t now = time(nullptr);
         DebugPrint(debug, "cur time: %s", ctime(&now));
-        sendDataViaHttp(25.7, 35, 750, 1003);
+        sendDataViaMqtt(0x76, 25.7, 35, 750);
     }*/
 }

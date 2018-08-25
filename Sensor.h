@@ -6,14 +6,6 @@
 #include <Arduino.h>
 #include <Adafruit_BME280.h>
 
-enum SensorIdEnum
-{
-    SI_Guestroom = 1000,
-    SI_Bedroom = 1001,
-    SI_Kitchen = 1002,
-    SI_Street = 1003
-};
-
 struct SensorData
 {
     SensorData() {}
@@ -27,8 +19,7 @@ struct SensorData
 class Sensor
 {
 public:
-    Sensor(int sensorId, int chipAddr, DebugStream& debugStream) :
-        id(sensorId),
+    Sensor(int chipAddr, DebugStream& debugStream) :
         chipAddress(chipAddr),
         debug(debugStream)
     {
@@ -49,7 +40,7 @@ public:
     }
 
     bool isValid() { return valid; }
-    int getId() { return id; }
+    int getId() { return chipAddress; }
 
     float getTemperature() { return temperature; }
     float getHumidity() { return humidity; }
@@ -140,7 +131,6 @@ private:
     const unsigned long updateInterval = 12 * 1000;
     const unsigned long samplesNeeded = 5;
 
-    int id = 0;
     int chipAddress = 0;
     bool valid = false;
 
